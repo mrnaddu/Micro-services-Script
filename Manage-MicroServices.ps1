@@ -220,7 +220,14 @@ if (Ask-YesNo "Rename solution from '$solutionBaseName'?") {
         foreach ($file in $filesToUpdate) {
             try {
                 $content = Get-Content $file.FullName -Raw
-                $updated = $content -replace "\b$solutionBaseName\b", $newName
+
+                # Replace patterns carefully
+                $updated = $content `
+                    -replace "\bProjects\.${solutionBaseName}_", "Projects.${newName}_" `
+                    -replace "\b$solutionBaseName\.", "$newName." `
+                    -replace "$($solutionBaseName.ToLower())-", "$($newName.ToLower())-" `
+                    -replace "\b$solutionBaseName\b", $newName
+
                 if ($content -ne $updated) {
                     Set-Content $file.FullName $updated
                     Write-Host "✏️ Updated: $($file.FullName)" -ForegroundColor Gray
@@ -270,7 +277,7 @@ if (Ask-YesNo "Rename solution from '$solutionBaseName'?") {
             }
         }
 
-        # Update in-memory solutionBaseName variable
+        # 5. Update in-memory variables
         $solutionBaseName = $newName
         $solutionFile = "$solutionBaseName.sln"
         $appHostFolder = "$solutionBaseName.AppHost"
