@@ -206,39 +206,93 @@ if ($deleteInput -ne "none") {
     }
 }
 
-# --- Rename Solution ---
+# ===============================
+# ✏️ Rename Solution
+# ===============================
 if (Ask-YesNo "Rename solution from '$solutionBaseName'?") {
     $newName = To-PascalCase (Read-Host "Enter new solution name")
     if ($newName -and $newName -ne $solutionBaseName) {
-        Write-Host "Renaming '$solutionBaseName' to '$newName'..." -ForegroundColor Cyan
-        
-        # Update file contents
-        Get-ChildItem -Recurse -File -Include *.cs,*.csproj,*.json,*.sln,*.xml,*.md | ForEach-Object {
+        Write-Host "🔄 Renaming solution '$solutionBaseName' to '$newName'..." -ForegroundColor Cyan
+
+        # 1. Update file contents
+        Write-Host "🔍 Updating file contents..." -ForegroundColor Cyan
+        $filesToUpdate = Get-ChildItem -Recurse -File -Include *.cs,*.csproj,*.json,*.sln,*.xml,*.md
+        foreach ($file in $filesToUpdate) {
             try {
-                $content = Get-Content $_.FullName -Raw
+                $content = Get-Content $file.FullName -Raw
                 $updated = $content -replace "\b$solutionBaseName\b", $newName
-                if ($content -ne $updated) { Set-Content $_.FullName $updated }
-            } catch {}
+                if ($content -ne $updated) {
+                    Set-Content $file.FullName $updated
+                    Write-Host "✏️ Updated: $($file.FullName)" -ForegroundColor Gray
+                }
+            } catch {
+                Write-Host "⚠️ Failed to update $($file.FullName)" -ForegroundColor Yellow
+            }
         }
-        
-        # Rename all items containing solution name
-        Get-ChildItem -Recurse | Where-Object { $_.Name -like "*$solutionBaseName*" } | Sort-Object -Descending -Property FullName | ForEach-Object {
+
+        # 2. Rename solution file
+        if (Test-Path "$solutionBaseName.sln") {
             try {
-                $newItemName = $_.Name -replace "\b$solutionBaseName\b", $newName
-                if ($_.Name -ne $newItemName) { Rename-Item $_.FullName -NewName $newItemName -Force }
-            } catch {}
+                Rename-Item "$solutionBaseName.sln" "$newName.sln" -Force
+                Write-Host "📄 Renamed solution file to '$newName.sln'" -ForegroundColor Green
+            } catch {
+                Write-Host "❌ Failed to rename solution file." -ForegroundColor Red
+            }
         }
-        
-        # Rename repo folder
-        $parent = Split-Path -Parent (Get-Location)
-        $current = Split-Path -Leaf (Get-Location)
-        if ($current -ne $newName) {
-            Set-Location $parent
-            try { Rename-Item $current $newName -Force; Set-Location $newName } catch { Set-Location $current }
+
+        # 3. Rename folders and files with solution name
+        Write-Host "📁 Renaming folders and files containing '$solutionBaseName'..." -ForegroundColor Cyan
+        Get-ChildItem -Recurse | Where-Object { $_.Name -like "*$solutionBaseName*" } |
+        Sort-Object -Descending -Property FullName | ForEach-Object {
+            try {
+                $newItemName = $_.Name -replace "$solutionBaseName", $newName
+                if ($_.Name -ne $newItemName) {
+                    Rename-Item $_.FullName -NewName $newItemName -Force
+                    Write-Host "✅ Renamed: $($_.FullName) → $newItemName" -ForegroundColor Gray
+                }
+            } catch {
+                Write-Host "⚠️ Could not rename $($_.FullName)" -ForegroundColor Yellow
+            }
         }
-        
-        Write-Host "Solution renamed to '$newName'" -ForegroundColor Green
+
+        # 4. Rename repo folder (if matches)
+        $currentFolder = Split-Path -Leaf (Get-Location)
+        if ($currentFolder -eq $solutionBaseName) {
+            $parentFolder = Split-Path -Parent (Get-Location)
+            try {
+                Set-Location $parentFolder
+                Rename-Item $solutionBaseName $newName -Force
+                Set-Location "$parentFolder\$newName"
+                Write-Host "📂 Renamed root folder to '$newName'" -ForegroundColor Green
+            } catch {
+                Write-Host "⚠️ Could not rename root folder." -ForegroundColor Yellow
+                Set-Location "$parentFolder\$solutionBaseName"
+            }
+        }
+
+        # Update in-memory solutionBaseName variable
+        $solutionBaseName = $newName
+        $solutionFile = "$solutionBaseName.sln"
+        $appHostFolder = "$solutionBaseName.AppHost"
+        $appHostProject = "$appHostFolder/$solutionBaseName.AppHost.csproj"
+        $programFile = "$appHostFolder/Program.cs"
+
+        Write-Host "✅ Solution successfully renamed to '$solutionBaseName'" -ForegroundColor Green
+    } else {
+        Write-Host "❌ Invalid or unchanged solution name. Skipping rename." -ForegroundColor Yellow
     }
 }
 
+# ===============================
+# 🛠️ Final Build
+# ===============================
+Write-Host "`n🚧 Building the solution..." -ForegroundColor Cyan
+dotnet build $solutionFile
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "✅ Build succeeded." -ForegroundColor Green
+} else {
+    Write-Host "❌ Build failed. Please check the output above." -ForegroundColor Red
+}
+
 Write-Host "`n🎉 Service management complete. All operations finished." -ForegroundColor Green
+
