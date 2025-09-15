@@ -3,12 +3,15 @@
 # ===============================
 function To-PascalCase($text) {
     if ([string]::IsNullOrWhiteSpace($text)) { return "" }
-    $parts = $text -split "[^a-zA-Z0-9]+" | Where-Object { $_ }
+    $normalized = $text -replace '([a-z])([A-Z])', '$1 $2'
+    $parts = $normalized -split '[^a-zA-Z0-9]+' | Where-Object { $_ }
+
     return ($parts | ForEach-Object {
         if ($_.Length -eq 1) { $_.ToUpper() }
         else { $_.Substring(0,1).ToUpper() + $_.Substring(1).ToLower() }
     }) -join ""
 }
+
 
 # ===============================
 # 🔍 Check Dependencies
