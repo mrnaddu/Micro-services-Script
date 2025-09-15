@@ -12,7 +12,6 @@ function To-PascalCase($text) {
     }) -join ""
 }
 
-
 # ===============================
 # 🔍 Check Dependencies
 # ===============================
