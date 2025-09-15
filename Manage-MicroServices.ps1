@@ -3,13 +3,79 @@
 # ===============================
 function To-PascalCase($text) {
     if ([string]::IsNullOrWhiteSpace($text)) { return "" }
-    $normalized = $text -replace '([a-z])([A-Z])', '$1 $2'
-    $parts = $normalized -split '[^a-zA-Z0-9]+' | Where-Object { $_ }
+    $parts = $text -split "[^a-zA-Z0-9]+" | Where-Object { $_ }
+    return ($parts | ForEach-Object { 
+            if ($_.Length -eq 1) { $_.ToUpper() } 
+            else { $_.Substring(0, 1).ToUpper() + $_.Substring(1).ToLower() } 
+        }) -join ""
+}
 
-    return ($parts | ForEach-Object {
-        if ($_.Length -eq 1) { $_.ToUpper() }
-        else { $_.Substring(0,1).ToUpper() + $_.Substring(1).ToLower() }
-    }) -join ""
+# split combined PascalCase words (e.g., "CoreOps" -> "Core", "Ops")
+function Split-PascalCase($text) {
+    if ([string]::IsNullOrWhiteSpace($text)) { return @() }
+    
+    # First, handle common abbreviations and numbers
+    $words = @()
+    $currentWord = ""
+    
+    for ($i = 0; $i -lt $text.Length; $i++) {
+        $char = $text[$i]
+        
+        # Start of a new word
+        if ($i -gt 0 -and (
+                # Capital followed by lowercase (e.g., "Ops" in "CoreOps")
+                ([char]::IsUpper($char) -and [char]::IsLower($text[$i + 1])) -or
+                # Lowercase followed by capital (e.g., "System" in "OpsSystem")
+                ([char]::IsLower($char) -and $i + 1 -lt $text.Length -and [char]::IsUpper($text[$i + 1])) -or
+                # Number after letter or letter after number
+                ([char]::IsLetter($char) -and $i + 1 -lt $text.Length -and [char]::IsNumber($text[$i + 1])) -or
+                ([char]::IsNumber($char) -and $i + 1 -lt $text.Length -and [char]::IsLetter($text[$i + 1]))
+            )) {
+            if ($currentWord) {
+                $words += $currentWord
+                $currentWord = ""
+            }
+        }
+        
+        $currentWord += $char
+    }
+    
+    if ($currentWord) {
+        $words += $currentWord
+    }
+    
+    return $words
+}
+
+function Convert-ToSolutionName($inputName) {
+    # Remove any non-alphanumeric characters and split into words
+    $words = $inputName -replace '[^a-zA-Z0-9]', ' ' -split '\s+' | Where-Object { $_ }
+    
+    # Handle each word
+    $processedWords = foreach ($word in $words) {
+        # Split words that might be combined (e.g., "CoreOps" -> "Core", "Ops")
+        $subWords = Split-PascalCase($word)
+        if ($subWords.Count -gt 0) {
+            $subWords
+        }
+        else {
+            $word
+        }
+    }
+    
+    # Convert each word to proper case
+    $properWords = $processedWords | ForEach-Object {
+        if ($_.Length -le 2) { 
+            # Keep short words (like "UI", "OS") uppercase
+            $_.ToUpper()
+        }
+        else {
+            # Proper case for longer words
+            $_.Substring(0, 1).ToUpper() + $_.Substring(1).ToLower()
+        }
+    }
+    
+    return ($properWords -join '')
 }
 
 # ===============================
@@ -41,7 +107,8 @@ $cloneDir = "PlayTicket"
 if (-not (Test-Path $cloneDir)) {
     Write-Host "📥 Cloning repository..." -ForegroundColor Cyan
     git clone $repoUrl
-} else {
+}
+else {
     Write-Host "📦 Repository already exists." -ForegroundColor Yellow
 }
 Set-Location $cloneDir
@@ -95,7 +162,8 @@ function Create-Services {
             if ($_.Name -ne $newName) {
                 try {
                     Rename-Item $_.FullName -NewName $newName -Force
-                } catch {
+                }
+                catch {
                     Write-Host "Warning: Could not rename $($_.Name)" -ForegroundColor Yellow
                 }
             }
@@ -109,7 +177,8 @@ function Create-Services {
                 if ($content -ne $updated) {
                     Set-Content $_.FullName $updated
                 }
-            } catch {
+            }
+            catch {
                 Write-Host "Warning: Could not update content of $($_.Name)" -ForegroundColor Yellow
             }
         }
@@ -203,7 +272,8 @@ if ($deleteInput -ne "none") {
     $toDelete = $deleteInput -split "," | ForEach-Object { $_.Trim() } | Where-Object { $_ }
     if ($toDelete.Count -gt 0 -and (Ask-YesNo "Are you sure you want to delete these service(s)?")) {
         Delete-Services -serviceNames $toDelete
-    } else {
+    }
+    else {
         Write-Host "❌ No valid services selected or operation cancelled." -ForegroundColor Yellow
     }
 }
@@ -212,82 +282,68 @@ if ($deleteInput -ne "none") {
 # ✏️ Rename Solution
 # ===============================
 if (Ask-YesNo "Rename solution from '$solutionBaseName'?") {
-    $newName = To-PascalCase (Read-Host "Enter new solution name")
+    $inputName = Read-Host "Enter new solution name"
+    $newName = Convert-ToSolutionName $inputName
+    
     if ($newName -and $newName -ne $solutionBaseName) {
         Write-Host "🔄 Renaming solution '$solutionBaseName' to '$newName'..." -ForegroundColor Cyan
 
-        # 1. Update file contents
+        # 1. Update file contents first
         Write-Host "🔍 Updating file contents..." -ForegroundColor Cyan
-        $filesToUpdate = Get-ChildItem -Recurse -File -Include *.cs,*.csproj,*.json,*.sln,*.xml,*.md
+        $filesToUpdate = Get-ChildItem -Recurse -File -Include *.cs, *.csproj, *.json, *.sln, *.xml, *.md -ErrorAction SilentlyContinue
         foreach ($file in $filesToUpdate) {
             try {
-                $content = Get-Content $file.FullName -Raw
+                $content = Get-Content $file.FullName -Raw -ErrorAction Stop
+                if ([string]::IsNullOrEmpty($content)) { continue }
 
-                # Replace patterns carefully
-                $updated = $content `
-                    -replace "\bProjects\.${solutionBaseName}_", "Projects.${newName}_" `
-                    -replace "\b$solutionBaseName\.", "$newName." `
-                    -replace "$($solutionBaseName.ToLower())-", "$($newName.ToLower())-" `
-                    -replace "\b$solutionBaseName\b", $newName
+                $updated = $content
+                $updated = $updated -replace "\bProjects\.$([regex]::Escape($solutionBaseName))_", "Projects.${newName}_"
+                $updated = $updated -replace "\b$([regex]::Escape($solutionBaseName))\.", "$newName."
+                $updated = $updated -replace "$([regex]::Escape($solutionBaseName.ToLower()))-", "$($newName.ToLower())-"
+                $updated = $updated -replace "\b$([regex]::Escape($solutionBaseName))\b", $newName
 
                 if ($content -ne $updated) {
-                    Set-Content $file.FullName $updated
-                    Write-Host "✏️ Updated: $($file.FullName)" -ForegroundColor Gray
+                    Set-Content $file.FullName $updated -ErrorAction Stop
+                    Write-Host "✏️ Updated: $($file.Name)" -ForegroundColor Gray
                 }
-            } catch {
-                Write-Host "⚠️ Failed to update $($file.FullName)" -ForegroundColor Yellow
+            }
+            catch {
+                Write-Host "⚠️ Failed to update $($file.Name): $($_.Exception.Message)" -ForegroundColor Yellow
             }
         }
 
-        # 2. Rename solution file
-        if (Test-Path "$solutionBaseName.sln") {
+        # 2. Rename files and folders (deepest first)
+        Write-Host "📁 Renaming files and folders..." -ForegroundColor Cyan
+        $itemsToRename = Get-ChildItem -Recurse -ErrorAction SilentlyContinue | 
+        Where-Object { $_.Name -like "*$solutionBaseName*" } |
+        Sort-Object { $_.FullName.Length } -Descending
+        
+        foreach ($item in $itemsToRename) {
             try {
-                Rename-Item "$solutionBaseName.sln" "$newName.sln" -Force
-                Write-Host "📄 Renamed solution file to '$newName.sln'" -ForegroundColor Green
-            } catch {
-                Write-Host "❌ Failed to rename solution file." -ForegroundColor Red
-            }
-        }
-
-        # 3. Rename folders and files with solution name
-        Write-Host "📁 Renaming folders and files containing '$solutionBaseName'..." -ForegroundColor Cyan
-        Get-ChildItem -Recurse | Where-Object { $_.Name -like "*$solutionBaseName*" } |
-        Sort-Object -Descending -Property FullName | ForEach-Object {
-            try {
-                $newItemName = $_.Name -replace "$solutionBaseName", $newName
-                if ($_.Name -ne $newItemName) {
-                    Rename-Item $_.FullName -NewName $newItemName -Force
-                    Write-Host "✅ Renamed: $($_.FullName) → $newItemName" -ForegroundColor Gray
+                $newItemName = $item.Name -replace [regex]::Escape($solutionBaseName), $newName
+                if ($item.Name -ne $newItemName) {
+                    $newPath = Join-Path $item.Directory.FullName $newItemName
+                    if (-not (Test-Path $newPath)) {
+                        Rename-Item $item.FullName -NewName $newItemName -Force -ErrorAction Stop
+                        Write-Host "✅ Renamed: $($item.Name) → $newItemName" -ForegroundColor Gray
+                    }
                 }
-            } catch {
-                Write-Host "⚠️ Could not rename $($_.FullName)" -ForegroundColor Yellow
+            }
+            catch {
+                Write-Host "⚠️ Could not rename $($item.Name): $($_.Exception.Message)" -ForegroundColor Yellow
             }
         }
 
-        # 4. Rename repo folder (if matches)
-        $currentFolder = Split-Path -Leaf (Get-Location)
-        if ($currentFolder -eq $solutionBaseName) {
-            $parentFolder = Split-Path -Parent (Get-Location)
-            try {
-                Set-Location $parentFolder
-                Rename-Item $solutionBaseName $newName -Force
-                Set-Location "$parentFolder\$newName"
-                Write-Host "📂 Renamed root folder to '$newName'" -ForegroundColor Green
-            } catch {
-                Write-Host "⚠️ Could not rename root folder." -ForegroundColor Yellow
-                Set-Location "$parentFolder\$solutionBaseName"
-            }
-        }
-
-        # 5. Update in-memory variables
+        # 3. Update variables and final message
         $solutionBaseName = $newName
         $solutionFile = "$solutionBaseName.sln"
         $appHostFolder = "$solutionBaseName.AppHost"
         $appHostProject = "$appHostFolder/$solutionBaseName.AppHost.csproj"
         $programFile = "$appHostFolder/Program.cs"
 
-        Write-Host "✅ Solution successfully renamed to '$solutionBaseName'" -ForegroundColor Green
-    } else {
+        Write-Host "✅ Solution successfully renamed to '$newName'" -ForegroundColor Green
+    }
+    else {
         Write-Host "❌ Invalid or unchanged solution name. Skipping rename." -ForegroundColor Yellow
     }
 }
@@ -299,7 +355,8 @@ Write-Host "`n🚧 Building the solution..." -ForegroundColor Cyan
 dotnet build $solutionFile
 if ($LASTEXITCODE -eq 0) {
     Write-Host "✅ Build succeeded." -ForegroundColor Green
-} else {
+}
+else {
     Write-Host "❌ Build failed. Please check the output above." -ForegroundColor Red
 }
 
